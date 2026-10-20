@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Small Landlord Books</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --ink:#1d1d1b; --mute:#6b6b66; --line:#e2e2dc; --accent:#1f6f50; --bad:#b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151514; --card:#1f1f1d; --ink:#ececea; --mute:#a3a39c; --line:#33332f; --accent:#4fbf8f; --bad:#ff8a80; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:16px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  header h1 { font-size:18px; margin:0 16px 0 0; }
+  nav button, button { font:inherit; border:1px solid var(--line); background:var(--card); color:var(--ink); padding:6px 12px; border-radius:6px; cursor:pointer; }
+  nav button[aria-current="page"] { background:var(--accent); color:#fff; border-color:var(--accent); }
+  main { padding:16px; max-width:1200px; margin:auto; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:16px; }
+  .grid .card { margin:0; }
+  .k { color:var(--mute); font-size:13px; } .v { font-size:20px; font-weight:600; }
+  .neg { color:var(--bad); }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td.num, th.num { text-align:right; }
+  form { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px; }
+  label { display:flex; flex-direction:column; font-size:13px; color:var(--mute); gap:3px; }
+  input, select, textarea { font:inherit; padding:6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); }
+  ul.alerts li { margin-bottom:4px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Small Landlord Books</h1>
+  <nav id="tabs"></nav>
+</header>
+<main id="app"></main>
+<script src="calc.js"></script>
+<script>
+const KEY = 'landlord-v1';
+const EMPTY = { properties: [], tenants: [], transactions: [], maintenance: [], contractors: [], settings: {} };
+let data = load(), tab = 'Dashboard', editing = null, filterProp = '';
+
+function load() {
+  try { return { ...EMPTY, ...JSON.parse(localStorage.getItem(KEY)) }; } catch { return structuredClone(EMPTY); }
+}
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(data)); }
+  catch { alert('Could not save in this browser. Use Export to keep a backup.'); }
+}
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const money = (n) => (n < 0 ? '-' : '') + '$' + Math.abs(Math.round(n || 0)).toLocaleString();
+const pct = (n) => n == null ? 'n/a' : (n * 100).toFixed(1) + '%';
+const today = () => new Date().toISOString().slice(0, 10);
+const byId = (list, id) => data[list].find((x) => x.id === id) || {};
+
+// Field lists drive every form and table. [key, label, type, options?]
+const opts = (list, label) => () => [['', '(none)'], ...data[list].map((x) => [x.id, x[label]])];
+const SCHEMA = {
+  properties: [['name', 'Nickname', 'text'], ['address', 'Full address', 'text'], ['units', 'Units', 'number'],
+    ['purchasePrice', 'Purchase price', 'number'], ['purchaseDate', 'Purchase date', 'date'],
+    ['marketValue', 'Market value', 'number'], ['loanBalance', 'Loan balance', 'number'],
+    ['interestRate', 'Interest rate %', 'number'], ['notes', 'Notes', 'textarea']],
+  tenants: [['propertyId', 'Property', 'select', opts('properties', 'name')], ['unit', 'Unit', 'text'], ['name', 'Name', 'text'],
+    ['phone', 'Phone', 'tel'], ['email', 'Email', 'email'], ['rent', 'Monthly rent', 'number'], ['deposit', 'Security deposit', 'number'],
+    ['leaseStart', 'Lease start', 'date'], ['leaseEnd', 'Lease end', 'date'], ['monthToMonth', 'Month-to-month', 'select', () => [['no', 'no'], ['yes', 'yes']]],
+    ['emergencyContact', 'Emergency contact', 'text'], ['notes', 'Notes', 'textarea']],
+  transactions: [['date', 'Date', 'date'], ['propertyId', 'Property', 'select', opts('properties', 'name')],
+    ['category', 'Category', 'select', () => CATEGORIES.map(([c, k, line]) => [c, `${c}${line ? ' (' + line + ')' : ''}`])],
+    ['amount', 'Amount', 'number'], ['tenantId', 'Tenant', 'select', opts('tenants', 'name')],
+    ['contractorId', 'Contractor', 'select', opts('contractors', 'name')], ['note', 'Note', 'text']],
+  maintenance: [['date', 'Reported', 'date'], ['propertyId', 'Property', 'select', opts('properties', 'name')], ['unit', 'Unit', 'text'],
+    ['issue', 'Issue', 'text'], ['priority', 'Priority', 'select', () => ['low', 'normal', 'urgent'].map((x) => [x, x])],
+    ['status', 'Status', 'select', () => ['open', 'scheduled', 'done'].map((x) => [x, x])],
+    ['contractorId', 'Contractor', 'select', opts('contractors', 'name')], ['cost', 'Final cost', 'number'], ['notes', 'Notes', 'textarea']],
+  contractors: [['name', 'Name', 'text'], ['trade', 'Trade (plumber, HVAC...)', 'text'], ['company', 'Company', 'text'],
+    ['phone', 'Phone', 'tel'], ['email', 'Email', 'email'], ['license', 'License #', 'text'],
+    ['insuranceExpires', 'Insurance expires', 'date'], ['rate', 'Rate / pricing', 'text'],
+    ['rating', 'Rating 1-5', 'number'], ['notes', 'Notes', 'textarea']],
+};
+const TABS = { Dashboard: null, Properties: 'properties', Tenants: 'tenants', Money: 'transactions', Maintenance: 'maintenance', Contractors: 'contractors', Settings: null };
+const REQUIRED = { properties: ['name', 'address', 'units'], tenants: ['propertyId', 'name'], transactions: ['date', 'propertyId', 'category', 'amount'],
+  maintenance: ['date', 'propertyId', 'issue'], contractors: ['name'] };
+
+function display(list, key, val) {
+  const f = SCHEMA[list].find((x) => x[0] === key);
+  if (f[2] === 'select' && key.endsWith('Id')) return esc(byId(key === 'propertyId' ? 'properties' : key === 'tenantId' ? 'tenants' : 'contractors', val).name);
+  if (f[2] === 'number' && /price|Value|Balance|rent|deposit|amount|cost/i.test(key)) return val === '' || val == null ? '' : money(val);
+  return esc(val);
+}
+
+function input([key, label, type, options], val = '') {
+  const req = REQUIRED[TABS[tab]].includes(key) ? 'required' : '';
+  if (type === 'select') return `<label>${label}<select name="${key}" ${req}>${options().map(([v, t]) =>
+    `<option value="${esc(v)}" ${v === val ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`;
+  if (type === 'textarea') return `<label>${label}<textarea name="${key}">${esc(val)}</textarea></label>`;
+  return `<label>${label}<input name="${key}" type="${type}" ${type === 'number' ? 'step="any"' : ''} value="${esc(val)}" ${req}></label>`;
+}
+
+function listView(list) {
+  const fields = SCHEMA[list], rec = editing ? byId(list, editing) : (list === 'transactions' || list === 'maintenance' ? { date: today() } : {});
+  let rows = data[list].filter((r) => !filterProp || r.propertyId === filterProp || list === 'properties' || list === 'contractors');
+  if (list === 'transactions' || list === 'maintenance') rows = [...rows].sort((a, b) => b.date.localeCompare(a.date));
+  const shown = fields.filter((f) => f[2] !== 'textarea');
+  return `${list === 'transactions' ? breakdown() : ''}
+  <div class="card"><h2>${editing ? 'Edit' : 'Add'} ${tab.toLowerCase()} record</h2>
+    <form id="f">${fields.map((f) => input(f, rec[f[0]])).join('')}
+      <div><button>${editing ? 'Save' : 'Add'}</button> ${editing ? '<button type="button" data-cancel>Cancel</button>' : ''}</div></form></div>
+  <div class="card scroll"><table><tr>${shown.map((f) => `<th>${f[1]}</th>`).join('')}<th></th></tr>
+    ${rows.map((r) => `<tr>${shown.map(([k]) => `<td>${display(list, k, r[k])}</td>`).join('')}
+      <td>${list === 'properties' ? `<button data-value="${r.id}">Update value</button> <a target="_blank" rel="noopener" href="https://www.zillow.com/homes/${encodeURIComponent(r.address)}_rb/">Zillow</a> ` : ''}
+      <button data-edit="${r.id}">Edit</button> <button data-del="${r.id}">Delete</button></td></tr>`).join('')}</table></div>`;
+}
+
+function propFilter() {
+  return `<label style="max-width:260px">Property<select id="pf"><option value="">All properties</option>${data.properties.map((p) =>
+    `<option value="${p.id}" ${p.id === filterProp ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>`;
+}
+
+function breakdown(withFilter = true) {
+  const s = summarize(data, filterProp);
+  return `<div class="card scroll"><h2>Last 12 months breakdown</h2>${withFilter ? propFilter() : ''}
+    <table><tr><th>Category</th><th>Tax line</th><th class="num">Amount</th><th class="num">Per month</th><th class="num">% of income</th></tr>
+    ${CATEGORIES.filter(([c]) => s.byCategory[c]).map(([c, k, line]) => `<tr><td>${esc(c)}</td><td>${line}</td>
+      <td class="num">${money(s.byCategory[c])}</td><td class="num">${money(s.byCategory[c] / 12)}</td>
+      <td class="num">${k === 'income' ? '' : pct(s.income ? s.byCategory[c] / s.income : null)}</td></tr>`).join('')}
+    <tr><th>Net operating income</th><td></td><th class="num">${money(s.noi)}</th><th class="num">${money(s.noi / 12)}</th><td></td></tr>
+    <tr><th>Cash flow after debt & capex</th><td></td><th class="num ${s.cashFlow < 0 ? 'neg' : ''}">${money(s.cashFlow)}</th><th class="num">${money(s.cashFlow / 12)}</th><td></td></tr></table></div>`;
+}
+
+function stat(k, v, neg) { return `<div class="card"><div class="k">${k}</div><div class="v ${neg ? 'neg' : ''}">${v}</div></div>`; }
+
+function dashboard() {
+  const s = summarize(data, filterProp), now = new Date();
+  const tenants = data.tenants.filter((t) => (!filterProp || t.propertyId === filterProp) && isActive(t, now));
+  const units = data.properties.filter((p) => !filterProp || p.id === filterProp).reduce((a, p) => a + Number(p.units || 0), 0);
+  const roll = tenants.reduce((a, t) => a + Number(t.rent || 0), 0);
+  const list = alerts(data, now);
+  return `${propFilter()}<br>
+  <div class="grid">${stat('Market value', money(s.value))}${stat('Equity', money(s.equity))}
+    ${stat('Monthly rent roll', money(roll))}${stat('Occupancy', units ? `${tenants.length}/${units} units` : 'n/a')}
+    ${stat('Income (T12)', money(s.income))}${stat('Operating expenses (T12)', money(s.opex))}
+    ${stat('NOI (T12)', money(s.noi), s.noi < 0)}${stat('Cash flow (T12)', money(s.cashFlow), s.cashFlow < 0)}
+    ${stat('Cap rate', pct(s.capRate))}${stat('Expense ratio', pct(s.expenseRatio), s.expenseRatio > 0.5)}</div>
+  <div class="card"><h2>Tip of the week</h2><p>${esc(weeklyTip())}</p></div>
+  <div class="card"><h2>Needs attention (${list.length})</h2>${list.length ? `<ul class="alerts">${list.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>` : '<p>All clear.</p>'}</div>
+  ${breakdown(false)}`;
+}
+
+function settings() {
+  return `<div class="card"><h2>Automatic market values</h2>
+    <p>Add a free <a href="https://app.rentcast.io/app/api" target="_blank" rel="noopener">RentCast API key</a> (50 lookups/month free) and "Update value" looks up each address automatically. Without a key you type in the value from Zillow. The key stays in this browser only.</p>
+    <form id="sf"><label>RentCast API key<input name="rentcastKey" type="password" value="${esc(data.settings.rentcastKey)}"></label><div><button>Save key</button></div></form></div>
+  <div class="card"><h2>Backup</h2><p>Your data lives only in this browser. Export a backup every month.</p>
+    <button id="exp">Export backup (.json)</button> <label style="display:inline-flex">Import backup<input id="imp" type="file" accept=".json,application/json"></label></div>`;
+}
+
+async function updateValue(p) {
+  let value = null, source = 'manual';
+  if (data.settings.rentcastKey) {
+    try {
+      const r = await fetch('https://api.rentcast.io/v1/avm/value?address=' + encodeURIComponent(p.address),
+        { headers: { 'X-Api-Key': data.settings.rentcastKey, accept: 'application/json' } });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      value = (await r.json()).price; source = 'RentCast';
+    } catch (e) { alert(`Automatic lookup failed (${e.message}). Enter the value manually.`); }
+  }
+  if (!value) value = Number(prompt(`Current market value for ${p.address}? (check Zillow or Redfin)`, p.marketValue || ''));
+  if (!value || value <= 0) return;
+  p.marketValue = Math.round(value);
+  (p.valueHistory ||= []).push({ date: today(), value: p.marketValue, source });
+  save(); render();
+}
+
+function render() {
+  document.getElementById('tabs').innerHTML = Object.keys(TABS).map((t) =>
+    `<button data-tab="${t}" ${t === tab ? 'aria-current="page"' : ''}>${t}</button>`).join(' ');
+  document.getElementById('app').innerHTML = tab === 'Dashboard' ? dashboard() : tab === 'Settings' ? settings()
+    : (tab !== 'Properties' && tab !== 'Contractors' && tab !== 'Money' ? propFilter() + '<br>' : '') + listView(TABS[tab]);
+}
+
+document.addEventListener('click', (e) => {
+  const d = e.target.dataset, list = TABS[tab];
+  if (d.tab) { tab = d.tab; editing = null; render(); }
+  else if (d.edit) { editing = d.edit; render(); scrollTo(0, 0); }
+  else if (d.cancel !== undefined) { editing = null; render(); }
+  else if (d.del && confirm('Delete this record? This cannot be undone.')) { data[list] = data[list].filter((x) => x.id !== d.del); save(); render(); }
+  else if (d.value) updateValue(byId('properties', d.value));
+  else if (e.target.id === 'exp') {
+    const a = Object.assign(document.createElement('a'), { download: `landlord-backup-${today()}.json`,
+      href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })) });
+    a.click();
+  }
+});
+
+document.addEventListener('change', async (e) => {
+  if (e.target.id === 'pf') { filterProp = e.target.value; render(); }
+  if (e.target.id === 'imp' && e.target.files[0]) {
+    try {
+      const d = JSON.parse(await e.target.files[0].text());
+      if (!Object.keys(EMPTY).filter((k) => k !== 'settings').every((k) => Array.isArray(d[k]))) throw new Error('not a backup file');
+      if (confirm('Replace ALL current data with this backup?')) { data = { ...EMPTY, ...d }; save(); render(); }
+    } catch (err) { alert('Import failed: ' + err.message); }
+  }
+});
+
+document.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const fd = Object.fromEntries(new FormData(e.target));
+  if (e.target.id === 'sf') { data.settings.rentcastKey = fd.rentcastKey.trim(); save(); alert('Saved.'); return; }
+  const list = TABS[tab];
+  if (list === 'properties' && Number(fd.units) > 8) alert('Heads up: this app is tuned for 1-8 unit buildings.');
+  let rec = editing ? byId(list, editing) : { id: crypto.randomUUID() };
+  if (!editing) data[list].push(rec);
+  Object.assign(rec, fd);
+  if (list === 'properties' && fd.marketValue && !(rec.valueHistory || []).some((h) => h.value === Number(fd.marketValue)))
+    (rec.valueHistory ||= []).push({ date: today(), value: Number(fd.marketValue), source: 'manual' });
+  // Finished jobs land in the books once, as a Repairs expense.
+  if (list === 'maintenance' && rec.status === 'done' && Number(rec.cost) > 0 && !rec.expenseId) {
+    rec.expenseId = crypto.randomUUID();
+    data.transactions.push({ id: rec.expenseId, date: today(), propertyId: rec.propertyId, category: 'Repairs',
+      amount: rec.cost, contractorId: rec.contractorId, note: 'Maintenance: ' + rec.issue });
+  }
+  editing = null; save(); render();
+});
+
+render();
+</script>
+</body>
+</html>
